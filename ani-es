@@ -50,6 +50,12 @@ init_history() {
         echo "{}" > "$HISTORY_FILE"
     fi
 
+    # si el archivo no es JSON válido (p. ej. por un corte a la mitad),
+    # se regenera para que jq no falle en toda la sesión
+    if ! jq empty "$HISTORY_FILE" > /dev/null 2>&1; then
+        echo "{}" > "$HISTORY_FILE"
+    fi
+
     if [[ -f "$OLD_DB" ]]; then
 
         echo
@@ -170,21 +176,28 @@ save_history() {
     local progress="$3"
     local source="$4"
 
+    # no guardar episodios vacíos ni corromper el historial
+    if [ -z "$cap" ]; then
+        return 0
+    fi
+
     tmp=$(mktemp)
 
-    jq \
+    if jq \
         --arg anime "$anime" \
         --arg cap "$cap" \
         --arg progress "$progress" \
         --arg source "$source" \
         '.[$anime] = {
-            last_cap: ($cap|tonumber),
+            last_cap: (($cap|tonumber?) // 0),
             progress: $progress,
             source: $source
         }' \
-        "$HISTORY_FILE" > "$tmp"
-
-    mv "$tmp" "$HISTORY_FILE"
+        "$HISTORY_FILE" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$HISTORY_FILE"
+    else
+        rm -f "$tmp"
+    fi
 }
  
 
@@ -636,34 +649,24 @@ wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 
 url_without_https="${nuevaurl/https:\/\//}"
 
-if [ -d "$url_without_https" ]; then
-    token=$(curl -s -c cookies.txt "$nuevaurl" | grep -oP 'meta name="csrf-token" content="\K[^"]+')
-    api_url_base=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" "$url_without_https/index.html")
+# la estructura del mirror de wget -p varía entre ejecuciones,
+# por eso los datos del anime se extraen de una página descargada
+# directamente con curl (de forma determinista)
+page_anime="${TMPDIR:-/tmp}/ani-es-page-$$.html"
+curl -s -c cookies.txt -A "$JK_UA" -o "$page_anime" "$nuevaurl"
 
-    if [ ! -z "$api_url_base" ] && [ ! -z "$token" ]; then
-        
-        json_response=$(curl -s -X POST "${api_url_base}" \
-            -b cookies.txt \
-            -H "X-Requested-With: XMLHttpRequest" \
-            -H "X-CSRF-TOKEN: $token" \
-            --data-urlencode "_token=$token")
-        
-        num_episodios=$(echo "$json_response" | grep -oP '"total":\s*\K\d+')
-    fi
-else
-    token=$(curl -s -c cookies.txt "$nuevaurl" | grep -oP 'meta name="csrf-token" content="\K[^"]+')
-    api_url_base=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" "$url_without_https")
+token=$(grep -oP 'meta name="csrf-token" content="\K[^"]+' "$page_anime")
+api_url_base=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" "$page_anime" | head -n1)
 
-    if [ ! -z "$api_url_base" ] && [ ! -z "$token" ]; then
-        
-        json_response=$(curl -s -X POST "${api_url_base}" \
-            -b cookies.txt \
-            -H "X-Requested-With: XMLHttpRequest" \
-            -H "X-CSRF-TOKEN: $token" \
-            --data-urlencode "_token=$token")
+if [ ! -z "$api_url_base" ] && [ ! -z "$token" ]; then
 
-        num_episodios=$(echo "$json_response" | grep -oP '"total":\s*\K\d+')
-    fi
+    json_response=$(curl -s -X POST "${api_url_base}" \
+        -b cookies.txt \
+        -H "X-Requested-With: XMLHttpRequest" \
+        -H "X-CSRF-TOKEN: $token" \
+        --data-urlencode "_token=$token")
+
+    num_episodios=$(echo "$json_response" | grep -oP '"total":\s*\K\d+')
 fi
 
 [ -f cookies.txt ] && rm cookies.txt
@@ -673,19 +676,11 @@ echo -e "Anime: $GREEN $titulo_elegido $WHITE"
 
 last_cap=$(get_last_cap "$titulo_elegido")
 
+tipo=$(grep -oP '<span>Tipo:</span> \K[^<]+' "$page_anime" | tail -n 1)
 
-if [ -d "$url_without_https" ]; then
-    tipo=$(grep -oP '<span>Tipo:</span> \K[^<]+' $url_without_https/index.html | tail -n 1)
-else
-    tipo=$(grep -oP '<span>Tipo:</span> \K[^<]+' $url_without_https | tail -n 1)
-fi
-
-# ----- idioma del anime (campo "Idiomas:" de la pagina, ya descargada) -----
+# ----- idioma del anime (campo "Idiomas:" de la pagina) -----
 # los <a href=".../idioma/<slug>"> listan los idiomas disponibles del anime
-idioma=$(grep -oP 'href="https://jkanime\.net/idioma/\K[^"]+' "$url_without_https/index.html" 2>/dev/null | grep -v '^$' | sort -u | tr '\n' ',' | sed 's/,$//')
-if [ -z "$idioma" ]; then
-    idioma=$(grep -oP 'href="https://jkanime\.net/idioma/\K[^"]+' "$url_without_https" 2>/dev/null | grep -v '^$' | sort -u | tr '\n' ',' | sed 's/,$//')
-fi
+idioma=$(grep -oP 'href="https://jkanime\.net/idioma/\K[^"]+' "$page_anime" 2>/dev/null | grep -v '^$' | sort -u | tr '\n' ',' | sed 's/,$//')
 idioma_label=""
 if [ -n "$idioma" ]; then
     idioma_label=$(printf '%s' "$idioma" | tr ',' '\n' | sed \
@@ -706,16 +701,12 @@ fi
 
 CONTENIDO=$(curl -s -L "$nuevaurl")
 
-if [ -z "$num_episodios" ]; then
-    num_episodios=0
-fi
-
-if [ -z "$num_episodios" ]; then
+if [ -z "$num_episodios" ] || [ "$num_episodios" == "0" ]; then
   echo -e "Enlace ${CYAN}$nuevaurl${NC} no válido. Por favor ve a ${GREEN} https://github.com/Zhuchii/ani-es ${NC} y abre un issue especificando el enlace y el anime que estabas intentando ver. Lo corregiré y actualizaré el script ;)"
   echo "$url_without_https"
+  rm -f "$page_anime"
   exit
 fi
-
 
 
 if [ "$CONTINUE" == 1 ]; then
@@ -728,6 +719,13 @@ else
     --height=30 \
     --border \
     --reverse)
+fi
+
+if [ -z "$capi" ]; then
+  echo -e "${RED}No se seleccionó ningún episodio.${NC}"
+  clear
+  rm -f "$page_anime"
+  return
 fi
 
 clear
@@ -810,6 +808,7 @@ if [ -n "$ep_idioma" ]; then
 fi
 
 rm -r jkanime.net mediafire.com > /dev/null 2>&1
+rm -f "$page_anime"
 
 reproducir "$src_contenido"
 

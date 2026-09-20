@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="1.4.1"
+VERSION="1.5.0"
 
 CONTINUE=0
 progress="00:00:00"
@@ -30,12 +30,25 @@ HISTORY_DIR="$HOME/ani-es"
 OLD_DB="$HISTORY_DIR/history.db"
 HISTORY_FILE="$HOME/ani-es/history.json"
 
+JK_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
+# estado interno del flujo
+SRC_REFERER=""
+CMD_UA="$JK_UA"
+ABORT=0
+SALIR=0
+REENTRY=""
+# navegacion por idioma (/-i): espanol-latino | japones
+IDIOMA_BROWSE=""
+
 
 init_history() {
 
     mkdir -p "$HISTORY_DIR"
 
-    [[ -f "$HISTORY_FILE" ]] || echo "{}" > "$HISTORY_FILE"
+    if [[ ! -f "$HISTORY_FILE" ]] || [[ ! -s "$HISTORY_FILE" ]]; then
+        echo "{}" > "$HISTORY_FILE"
+    fi
 
     if [[ -f "$OLD_DB" ]]; then
 
@@ -85,7 +98,8 @@ if cursor.fetchone():
 
         history[anime] = {
             "last_cap": last_cap,
-            "progress": progress
+            "progress": progress,
+            "source": "jkanime"
         }
 
 conn.close()
@@ -107,6 +121,30 @@ EOF
             echo "El historial antiguo ha sido eliminado."
         fi
     fi
+
+    # La fuente AnimeFLV fue retirada; sus registros pasan a jkanime
+    # para que "-c" siga funcionando sin tocar el pipeline eliminado.
+    python3 <<EOF
+import json
+
+path = "$HISTORY_FILE"
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        history = json.load(f)
+except Exception:
+    history = {}
+
+changed = False
+for anime, data in list(history.items()):
+    if isinstance(data, dict) and data.get("source") == "animeflv":
+        data["source"] = "jkanime"
+        changed = True
+
+if changed:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=4, ensure_ascii=False)
+EOF
 }
 
 init_history
@@ -130,6 +168,7 @@ save_history() {
     local anime="$1"
     local cap="$2"
     local progress="$3"
+    local source="$4"
 
     tmp=$(mktemp)
 
@@ -137,9 +176,11 @@ save_history() {
         --arg anime "$anime" \
         --arg cap "$cap" \
         --arg progress "$progress" \
+        --arg source "$source" \
         '.[$anime] = {
             last_cap: ($cap|tonumber),
-            progress: $progress
+            progress: $progress,
+            source: $source
         }' \
         "$HISTORY_FILE" > "$tmp"
 
@@ -155,6 +196,7 @@ show_help() {
     echo "      -h, --help       Mostrar ayuda"
     echo "      -v, --version    Mostrar versión"
     echo "      -c, --continue   Continua el anime en donde ultimo lo dejaste"
+    echo "      -i, --idioma ID  Lista los animes de un idioma (espanol-latino | japones)"
     echo ""
 }
 
@@ -175,6 +217,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--continue)
             CONTINUE=1
+            ;;
+        -i|--idioma)
+            if [[ -n "$2" ]]; then
+                IDIOMA_BROWSE="$2"
+                shift
+            fi
             ;;
         *)
             break
@@ -221,31 +269,104 @@ detect_env() {
     fi
 }
 
-main() {
+# ============ reproduccion compartida (jkanime) ============
 
-urlo="https://raw.githubusercontent.com/Zhuchii/ani-es/refs/heads/main/ani-es"
-SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-ARCHIVO="$SCRIPT_DIR/ani-es"
+reproducir() {
+    local src_contenido="$1"
+    local hdrs=""
 
-echo -e ${BLUE}Verificando actualizaciones disponibles...${NC}
-actualizado=$(curl -s "$urlo")
-actual=$(cat "$ARCHIVO")
+    ENV=$(detect_env)
+    pos=0
 
-update="$(curl -s "https://raw.githubusercontent.com/Zhuchii/ani-es/refs/heads/main/ani-es")"
-if [ "$update" != "$(cat "$ARCHIVO")" ]; then
-    echo -n -e "${CYAN}Hay una actualizacion disponible se recomienda actualizar para garantizar que el script funcine correctamente (y/n) ${NC}"
-    read ele
-    if [ "$ele" == "y" ];then
-    diff -u "$ARCHIVO" <(echo "$update") | sudo patch "$ARCHIVO" > /dev/null 2>&1 && echo -e "${CYAN}El script ha sido actualizado${NC}" || echo -e "${RED}Ha ocurrido un error mientras se actualizaba el script${NC}"
-    exit 0
+    if [ -n "$SRC_REFERER" ]; then
+        hdrs="--user-agent=$CMD_UA --http-header-fields=\"Referer: $SRC_REFERER\""
     fi
-else
-    echo "Script actualizado"
-fi
+
+    case "$ENV" in
+        wsl)
+            if command -v mpv.exe >/dev/null 2>&1; then
+                pos=$(mpv.exe --start=$progress $hdrs --msg-level=ffmpeg=no --force-media-title="$titulo_elegido-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
+            else
+                echo "mpv.exe no encontrado en Windows PATH"
+            fi
+            ;;
+        termux)
+            if pm list packages | grep -q 'org.videolan.vlc'; then
+                am start -a android.intent.action.VIEW -d "$src_contenido" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity
+                pos=0
+            else
+                termux-open-url "$src_contenido"
+                pos=0
+            fi
+            ;;
+        linux)
+            if command -v mpv >/dev/null 2>&1; then
+                pos=$(mpv --start=$progress $hdrs -v --msg-level=ffmpeg=no --force-media-title="$titulo_elegido-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
+            fi
+            ;;
+    esac
+}
+
+# limpiar estado entre busquedas (sin tocar CONTINUE/ABORT/SALIR)
+limpiar_estado() {
+    oracion=""
+    arg1=""
+    query=""
+    titulo_elegido=""
+    slug=""
+    capi=""
+    opcion=""
+    sel=""
+    src_contenido=""
+    SRC_REFERER=""
+    progress="00:00:00"
+    idioma=""
+    idioma_label=""
+}
+
+# menu posterior a la reproduccion (compartido)
+# requiere: ir_a_capitulo <numero> (definido por cada pipeline)
+menu_post_reproduccion() {
+    local op
+    op=$( (echo "Siguiente"; echo "Retroceder"; echo "Atras"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=9 --border --info=inline --margin=1,1,0,0)
+
+    if [[ "$op" == "Siguiente" ]]; then
+        progress="00:00:00"
+        capi=$((capi + 1))
+        save_history "$titulo_elegido" "$capi" "$pos" "jkanime"
+        ir_a_capitulo "$capi"
+    elif [[ "$op" == "Retroceder" ]]; then
+        progress="00:00:00"
+        capi=$((capi - 1))
+        ir_a_capitulo "$capi"
+    elif [[ "$op" == "Atras" ]]; then
+        ABORT=1
+    elif [[ "$op" == "Salir del programa" ]]; then
+        SALIR=1
+        ABORT=1
+    fi
+}
+
+# ==================== PIPELINE JKANIME ====================
+# (logica original del script, preservada; unica fuente actual)
+
+pipeline_jkanime() {
 
 clear
 
-check_dependencies wget fzf grep sed python3 mpv jq curl
+if [[ -n "$oracion" ]]; then
+    :
+elif [[ -z "$arg1" ]]; then
+    read -p "Buscar Anime: " oracion
+    clear
+    if [[ -z "$oracion" ]]; then
+        SALIR=1
+        ABORT=1
+        return
+    fi
+else
+    oracion="$arg1"
+fi
 
 pagina_siguiente() {
 
@@ -323,7 +444,7 @@ echo -e "Pagina: $new_number ${NC}"
 
 echo -e "Resultados para: $query"
 
-opcion=$( (cat "resultados.txt"; echo -e "Siguiente"; echo "Anterior"; echo "Salir") | tac | fzf --prompt="Selecciona una opción: " --height=19 --border --info=inline --margin=1,1,0,0)
+opcion=$( (cat "resultados.txt"; echo -e "Siguiente"; echo "Anterior"; echo "Salir"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=19 --border --info=inline --margin=1,1,0,0)
 
 
 if [[ "$opcion" == "Siguiente" ]]; then
@@ -331,8 +452,10 @@ if [[ "$opcion" == "Siguiente" ]]; then
 elif [[ "$opcion" == "Anterior" ]]; then
   pagina_anterior $new_urls
 elif [[ "$opcion" == "Salir" ]]; then
-  clear
-  main
+  ABORT=1
+elif [[ "$opcion" == "Salir del programa" ]]; then
+  SALIR=1
+  ABORT=1
 fi
 
 }
@@ -411,7 +534,7 @@ num_resultados=$(wc -l < resultados.txt)
 
 echo -e "Pagina: $new_number ${NC}"
 echo -e "Resultados para: $query"
-opcion=$( (cat "resultados.txt"; echo "Siguiente"; echo "Anterior"; echo "Salir") | tac | fzf --prompt="Selecciona una opción: " --height=19 --border --info=inline --margin=1,1,0,0)
+opcion=$( (cat "resultados.txt"; echo "Siguiente"; echo "Anterior"; echo "Salir"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=19 --border --info=inline --margin=1,1,0,0)
 
 
 if [[ "$opcion" == "Siguiente" ]]; then
@@ -419,22 +542,18 @@ if [[ "$opcion" == "Siguiente" ]]; then
 elif [[ "$opcion" == "Anterior" ]]; then
   pagina_anterior $new_urls
 elif [[ "$opcion" == "Salir" ]]; then
-  clear
-  main
+  ABORT=1
+elif [[ "$opcion" == "Salir del programa" ]]; then
+  SALIR=1
+  ABORT=1
 fi
 
 }
 
-if [[ -z "$arg1" ]]; then
-  read -p "Buscar Anime: " oracion
-  clear
-else
-  oracion="$arg1"
-fi
-
-
 query=$(echo $oracion | tr ' ' '_')
 
+
+rm -f resultados.txt
 
 wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p https://jkanime.net/buscar/$query/ > /dev/null 2>&1
 
@@ -462,7 +581,7 @@ else
   echo -e "Pagina: 1 ${NC}"
 
   echo -e "Resultados para: $query"
-  opcion=$( (cat "resultados.txt"; echo "Salir") | tac | fzf --prompt="Selecciona una opción: " --height=~20 --border --info=inline --margin=1,1,0,0)
+  opcion=$( (cat "resultados.txt"; echo "Salir"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=20 --border --info=inline --margin=1,1,0,0)
   clear
 fi
 
@@ -471,10 +590,15 @@ if [[ "$opcion" == "Siguiente" ]]; then
 elif [[ "$opcion" == "Anterior" ]]; then
   pagina_anterior "https://jkanime.net/buscar/$query/"
 elif [[ "$opcion" == "Salir" ]]; then
-  main
+  ABORT=1
+elif [[ "$opcion" == "Salir del programa" ]]; then
+  SALIR=1
+  ABORT=1
 fi
 
-clear
+if [ "$ABORT" == "1" ]; then
+  return
+fi
 
 titulo_elegido=$opcion
 
@@ -556,9 +680,28 @@ else
     tipo=$(grep -oP '<span>Tipo:</span> \K[^<]+' $url_without_https | tail -n 1)
 fi
 
+# ----- idioma del anime (campo "Idiomas:" de la pagina, ya descargada) -----
+# los <a href=".../idioma/<slug>"> listan los idiomas disponibles del anime
+idioma=$(grep -oP 'href="https://jkanime\.net/idioma/\K[^"]+' "$url_without_https/index.html" 2>/dev/null | grep -v '^$' | sort -u | tr '\n' ',' | sed 's/,$//')
+if [ -z "$idioma" ]; then
+    idioma=$(grep -oP 'href="https://jkanime\.net/idioma/\K[^"]+' "$url_without_https" 2>/dev/null | grep -v '^$' | sort -u | tr '\n' ',' | sed 's/,$//')
+fi
+idioma_label=""
+if [ -n "$idioma" ]; then
+    idioma_label=$(printf '%s' "$idioma" | tr ',' '\n' | sed \
+        -e 's/^espanol-latino$/Doblaje latino/' \
+        -e 's/^japones$/Subtitulado/' \
+        -e 's/^espanol-castellano$/Castellano/' \
+        | paste -sd' ' -)
+fi
+
 
 
 echo -e "Ultimo episodio visto: $last_cap"
+
+if [ -n "$idioma_label" ]; then
+    echo -e "Idioma: $CYAN $idioma_label $NC"
+fi
 
 
 CONTENIDO=$(curl -s -L "$nuevaurl")
@@ -582,7 +725,7 @@ if [ "$CONTINUE" == 1 ]; then
 else
   capi=$(seq 1 "$num_episodios" | fzf \
     --prompt="Episodio: " \
-    --height=~30 \
+    --height=30 \
     --border \
     --reverse)
 fi
@@ -596,6 +739,9 @@ fi
 
 capurl="$nuevaurl/$capi"
 
+ir_a_capitulo() {
+    videocap "$nuevaurl/$1"
+}
 
 videocap(){
 capa=$1
@@ -657,57 +803,125 @@ clear
 
 echo "Capitulo: $capi"
 
+# ----- idioma disponible en el episodio (select #deflang de la pagina) -----
+ep_idioma=$(tr -d '\n' < "$archivor" 2>/dev/null | grep -oP '<select id="deflang".*?</select>' | grep -oP 'Japones Sub\. Español|Espanol latino|Espanol castellano' | sort -u | paste -sd', ' -)
+if [ -n "$ep_idioma" ]; then
+    echo -e "Idioma del capitulo: $CYAN $ep_idioma $NC"
+fi
+
 rm -r jkanime.net mediafire.com > /dev/null 2>&1
 
-ENV=$(detect_env)
-pos=0
+reproducir "$src_contenido"
 
-case "$ENV" in
-    wsl)
-        if command -v mpv.exe >/dev/null 2>&1; then
-            pos=$(mpv.exe --start=$progress --msg-level=ffmpeg=no --force-media-title="$opcion-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
-        else
-            echo "mpv.exe no encontrado en Windows PATH"
-        fi
-        ;;
-    termux)
-        if pm list packages | grep -q 'org.videolan.vlc'; then
-            am start -a android.intent.action.VIEW -d "$src_contenido" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity
-            pos=0
-        else
-            termux-open-url "$src_contenido"
-            pos=0
-        fi
-        ;;
-    linux)
-        if command -v mpv >/dev/null 2>&1; then
-            pos=$(mpv --start=$progress -v --msg-level=ffmpeg=no --force-media-title="$opcion-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
-        fi
-        ;;
-esac
+save_history "$titulo_elegido" "$capi" "$pos" "jkanime"
 
-save_history "$titulo_elegido" "$capi" "$pos"
-
-op=$( (echo "Siguiente"; echo "Retroceder"; echo "Atras") | tac | fzf --prompt="Selecciona una opción: " --height=7 --border --info=inline --margin=1,1,0,0)
-
-if [[ "$op" == "Siguiente" ]]; then
-    progress="00:00:00"
-  capi=$((capi + 1))
-    save_history "$titulo_elegido" "$capi" "$pos"
-  videocap "$nuevaurl/$capi"
-elif [[ "$op" == "Retroceder" ]]; then
-  progress="00:00:00"
-  capi=$((capi - 1))
-  videocap "$nuevaurl/$capi"
-elif [[ "$opcion" == "Atras" ]]; then
-
-  main
-fi
+menu_post_reproduccion
 }
 videocap $capurl
 }
 
 
+# ==================== PIPELINE IDIOMA (indice por idioma) ====================
+# navega el catalogo paginado /idioma/<slug> (espanol-latino | japones)
+# y, al elegir un anime, continua dentro del pipeline jkanime (reentrada)
+
+pipeline_idioma() {
+
+clear
+
+local pag=1
+
+while true; do
+
+    rm -f resultados.txt
+
+    curl -s -m 25 -A "$JK_UA" \
+        "https://jkanime.net/idioma/$IDIOMA_BROWSE?p=$pag" \
+        -o pagina_idioma.html 2>/dev/null
+
+    grep -oP '<h5><a\s+href="[^"]*">\K.*?(?=</a></h5>)' pagina_idioma.html \
+        | sed 's/&quot;//g' > resultados.txt
+
+    rm -f pagina_idioma.html
+
+    num_resultados=$(wc -l < resultados.txt 2>/dev/null || echo 0)
+
+    if [ "$num_resultados" -eq 0 ]; then
+        echo -e "${RED}No hay animes en '$IDIOMA_BROWSE' (pagina $pag).${NC}"
+        read -rp "Presiona Enter para volver..." _
+        ABORT=1
+        IDIOMA_BROWSE=""
+        return
+    fi
+
+    echo -e "Idioma: $GREEN $IDIOMA_BROWSE $WHITE | Pagina: $pag"
+    echo -e "Resultados:"
+
+    opcion=$( (cat "resultados.txt"; echo "Siguiente"; echo "Anterior"; echo "Salir"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=20 --border --info=inline --margin=1,1,0,0)
+
+    if [[ "$opcion" == "Siguiente" ]]; then
+        pag=$((pag + 1))
+        continue
+    elif [[ "$opcion" == "Anterior" ]]; then
+        if [ "$pag" -gt 1 ]; then
+            pag=$((pag - 1))
+        fi
+        continue
+    elif [[ "$opcion" == "Salir" ]]; then
+        ABORT=1
+        IDIOMA_BROWSE=""
+        return
+    elif [[ "$opcion" == "Salir del programa" ]]; then
+        SALIR=1
+        ABORT=1
+        IDIOMA_BROWSE=""
+        return
+    fi
+
+    # seleccionado: continuar con el pipeline jkanime para ese titulo
+    titulo_elegido="$opcion"
+    oracion="$opcion"
+    IDIOMA_BROWSE=""
+    pipeline_jkanime
+    return
+done
+}
+
+
+# ==================== ENTRADA ====================
+
+main() {
+
+clear
+
+check_dependencies wget fzf grep sed python3 mpv jq curl
+
+while true; do
+    ABORT=0
+
+    if [ "$SALIR" == "1" ]; then
+        break
+    fi
+
+    # -c sin termino: usa la busqueda pasada por argumentos en el primer ciclo
+    if [ "$CONTINUE" == "1" ] && [ -z "$REENTRY" ] && [ -n "$arg1" ]; then
+        REENTRY="jkanime|$arg1"
+    fi
+
+    limpiar_estado
+
+    if [ -n "$REENTRY" ]; then
+        _re="$REENTRY"
+        REENTRY=""
+        oracion="${_re#*|}"
+    fi
+
+    if [ -n "$IDIOMA_BROWSE" ]; then
+        pipeline_idioma
+    else
+        pipeline_jkanime
+    fi
+done
+}
 
 main
-

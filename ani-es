@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="1.5.0"
+VERSION="1.5.1"
 
 CONTINUE=0
 progress="00:00:00"

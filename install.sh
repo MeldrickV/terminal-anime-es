@@ -75,34 +75,16 @@ echo "Todas las dependencias han sido instaladas correctamente."
 
 INSTALL_DIR="/usr/local/bin"
 SCRIPT_PATH="$(pwd)/ani-es"
-JSON_PATH="$(pwd)/excepciones.json"
 mkdir -p ~/ani-es/
-DATA_PATH="$(pwd)/history.db"
 
 if [ -f "$INSTALL_DIR/ani-es" ]; then
     echo "El script ani-es ya existe en el PATH."
     exit 1
 fi
 
-if [ -f "$INSTALL_DIR/excepciones.json" ]; then
-    exit 1
-fi
-
-if [ -f "$INSTALL_DIR/history.db" ]; then
-    exit 1
-fi
-sudo chmod +x ani-es
-sudo chmod +x uninstall.sh
+chmod +x ani-es
 sudo cp "$SCRIPT_PATH" "$INSTALL_DIR"
-sudo cp "$JSON_PATH" "$INSTALL_DIR"
-if [ ! -f ~/ani-es/history.db ]; then
-    sudo cp "$DATA_PATH" ~/ani-es/
-    sudo chmod 777 ~/ani-es/history.db
-else
-    echo "El archivo history.db ya existe y no se ha sobrescrito."
-fi
-sudo chmod 777 ~/ani-es/history.db
 echo ""
-clear
 echo "El script ani-es se ha instalado correctamente en el directorio $INSTALL_DIR."
 echo "Ahora puedes ejecutar 'ani-es' en cualquier lugar del sistema."
+echo "El historial se crea solo en ~/ani-es/history.json al primer arranque."

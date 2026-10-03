@@ -8,12 +8,16 @@ if [ ! -f "$INSTALL_DIR/ani-es" ]; then
     exit 1
 fi
 
-if [ ! -f "$INSTALL_DIR/excepciones.json" ]; then
-    exit 1
-fi
+sudo rm -f "$INSTALL_DIR/ani-es"
+# restos de versiones viejas (ya no se usan)
+sudo rm -f "$INSTALL_DIR/excepciones.json"
 
-sudo rm "$INSTALL_DIR/ani-es"
-sudo rm "$INSTALL_DIR/excepciones.json"
-sudo rm -r ~/ani-es/history.db
+read -r -p "¿Borrar también el historial (~/ani-es/history.json)? [s/N] " resp
+if [[ "$resp" =~ ^[sS]$ ]]; then
+    rm -f ~/ani-es/history.json ~/ani-es/history.json.bak
+    echo "Historial eliminado."
+else
+    echo "Historial conservado en ~/ani-es/history.json."
+fi
 
 echo "El script ani-es ha sido desinstalado correctamente."

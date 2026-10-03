@@ -710,7 +710,7 @@ if [ -z "$num_episodios" ] || [ "$num_episodios" == "0" ]; then
   echo -e "Enlace ${CYAN}$nuevaurl${NC} no válido. Por favor ve a ${GREEN} https://github.com/Zhuchii/ani-es ${NC} y abre un issue especificando el enlace y el anime que estabas intentando ver. Lo corregiré y actualizaré el script ;)"
   echo "$url_without_https"
   rm -f "$page_anime"
-  exit
+  return
 fi
 
 

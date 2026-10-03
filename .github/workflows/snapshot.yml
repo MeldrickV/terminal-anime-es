@@ -1,0 +1,59 @@
+# Vigia de cambios en el HTML de jkanime (D1).
+#
+# Descarga paginas testigo y verifica que los marcadores que usa el script
+# sigan existiendo. Si alguno falta, el job falla y avisa ANTES de que los
+# usuarios lo sufran. No toca la red fuera de este workflow (schedule/manual).
+name: Snapshot jkanime
+
+on:
+  schedule:
+    # Lunes 08:00 UTC.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar paginas testigo
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+          mkdir -p /tmp/snap
+          curl -sS --max-time 25 --retry 2 --fail -A "$UA" \
+            -o /tmp/snap/busqueda.html "https://jkanime.net/buscar/pokemon/"
+          curl -sS --max-time 25 --retry 2 --fail -A "$UA" -c /tmp/snap/cookies.txt \
+            -o /tmp/snap/detalle.html "https://jkanime.net/pokemon/"
+          TOKEN=$(grep -oP 'meta name="csrf-token" content="\K[^"]+' /tmp/snap/detalle.html | head -n1)
+          API=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" /tmp/snap/detalle.html | head -n1)
+          echo "TOKEN_LEN=${#TOKEN}" >> "$GITHUB_ENV"
+          if [ -n "$TOKEN" ] && [ -n "$API" ]; then
+            curl -sS --max-time 25 --retry 2 --fail -X POST "$API" -b /tmp/snap/cookies.txt \
+              -H "X-Requested-With: XMLHttpRequest" \
+              -H "X-CSRF-TOKEN: $TOKEN" \
+              --data-urlencode "_token=$TOKEN" \
+              -o /tmp/snap/episodios.json
+          fi
+
+      - name: Verificar marcadores
+        run: |
+          fallo=0
+          check() {
+            if ! grep -qaP "$2" "$1"; then
+              echo "::error::Marcador perdido: $3 (archivo $1)"
+              fallo=1
+            else
+              echo "OK: $3"
+            fi
+          }
+          check /tmp/snap/busqueda.html '<h5><a\s+href=' "busqueda <h5><a>"
+          check /tmp/snap/detalle.html 'meta name="csrf-token"' "detalle csrf-token"
+          check /tmp/snap/detalle.html 'ajax/episodes/[0-9]+' "detalle ajax/episodes"
+          check /tmp/snap/detalle.html '<span>Tipo:</span>' "detalle Tipo:"
+          check /tmp/snap/detalle.html '/idioma/' "detalle /idioma/"
+          if [ -f /tmp/snap/episodios.json ]; then
+            check /tmp/snap/episodios.json '"total":' "ajax total"
+          else
+            echo "::error::Marcador perdido: ajax episodios.json (POST fallo)"
+            fallo=1
+          fi
+          exit $fallo

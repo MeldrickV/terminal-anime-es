@@ -32,6 +32,11 @@ HISTORY_FILE="$HOME/ani-es/history.json"
 
 JK_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
+# red: timeouts y reintentos globales (evitan cuelgues con red caida;
+# 25s iguala el timeout que ya usaba pipeline_idioma)
+CURL_OPTS="--max-time 25 --retry 2 --fail -s"
+WGET_OPTS="--timeout=25 --tries=2"
+
 # estado interno del flujo
 SRC_REFERER=""
 CMD_UA="$JK_UA"
@@ -444,7 +449,7 @@ END
 
 rm -r jkanime.net
 
-wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p $new_urls wget > /dev/null 2>&1
+wget $WGET_OPTS --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p $new_urls wget > /dev/null 2>&1
 
 rm -r resultados.txt
 
@@ -536,7 +541,7 @@ END
 
 rm -r jkanime.net
 
-wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p $new_urls wget > /dev/null 2>&1
+wget $WGET_OPTS --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p $new_urls wget > /dev/null 2>&1
 
 rm -r resultados.txt
 
@@ -568,7 +573,7 @@ query=$(echo $oracion | tr ' ' '_')
 
 rm -f resultados.txt
 
-wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p https://jkanime.net/buscar/$query/ > /dev/null 2>&1
+wget $WGET_OPTS --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p https://jkanime.net/buscar/$query/ > /dev/null 2>&1
 
 
 input_file="jkanime.net/buscar/$query/index.html"
@@ -627,7 +632,7 @@ echo Cargando...
 JSON_URL="https://zhuchii.github.io/ani-es/excepciones.json"
 
 
-value=$(curl -s "$JSON_URL")
+value=$(curl $CURL_OPTS "$JSON_URL")
 
 if [ -n "$value" ] && [ "$value" != "null" ]; then
 
@@ -645,7 +650,7 @@ fi
 nuevaurl="${nuevaurl%%/}"
 rm -r jkanime.net > /dev/null 2>&1
 
-wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p $nuevaurl > /dev/null 2>&1
+wget $WGET_OPTS --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p $nuevaurl > /dev/null 2>&1
 
 url_without_https="${nuevaurl/https:\/\//}"
 
@@ -653,14 +658,14 @@ url_without_https="${nuevaurl/https:\/\//}"
 # por eso los datos del anime se extraen de una página descargada
 # directamente con curl (de forma determinista)
 page_anime="${TMPDIR:-/tmp}/ani-es-page-$$.html"
-curl -s -c cookies.txt -A "$JK_UA" -o "$page_anime" "$nuevaurl"
+curl $CURL_OPTS -c cookies.txt -A "$JK_UA" -o "$page_anime" "$nuevaurl"
 
 token=$(grep -oP 'meta name="csrf-token" content="\K[^"]+' "$page_anime")
 api_url_base=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" "$page_anime" | head -n1)
 
 if [ ! -z "$api_url_base" ] && [ ! -z "$token" ]; then
 
-    json_response=$(curl -s -X POST "${api_url_base}" \
+    json_response=$(curl $CURL_OPTS -X POST "${api_url_base}" \
         -b cookies.txt \
         -H "X-Requested-With: XMLHttpRequest" \
         -H "X-CSRF-TOKEN: $token" \
@@ -699,7 +704,7 @@ if [ -n "$idioma_label" ]; then
 fi
 
 
-CONTENIDO=$(curl -s -L "$nuevaurl")
+CONTENIDO=$(curl $CURL_OPTS -L "$nuevaurl")
 
 if [ -z "$num_episodios" ] || [ "$num_episodios" == "0" ]; then
   echo -e "Enlace ${CYAN}$nuevaurl${NC} no válido. Por favor ve a ${GREEN} https://github.com/Zhuchii/ani-es ${NC} y abre un issue especificando el enlace y el anime que estabas intentando ver. Lo corregiré y actualizaré el script ;)"
@@ -744,7 +749,7 @@ ir_a_capitulo() {
 videocap(){
 capa=$1
 
-wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p "$capa" > /dev/null 2>&1
+wget $WGET_OPTS --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p "$capa" > /dev/null 2>&1
 
 primera_carpeta=$(ls -d jkanime.net/*/ 2> /dev/null | head -n 1)
 primera_carpeta="${primera_carpeta%/}"
@@ -759,7 +764,7 @@ if ls jkanime.net/jkplayer/um* 1> /dev/null 2>&1; then
 
 # jk.php (antiguo) por si acaso
 elif ls jkanime.net/jk.php* 1> /dev/null 2>&1; then
-  wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p "$tre" > /dev/null 2>&1
+  wget $WGET_OPTS --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p "$tre" > /dev/null 2>&1
   src_contenido=$(grep -A 1 "video: {" jkanime.net/jk.php* | sed -n -e "s/.*url: '\(.*\)',.*/\1/p" -e "s/.*type: '\(.*\)'.*/\1/p")
 
 # Mediafire
@@ -785,7 +790,7 @@ print(base64.b64decode(mp4upload_server['remote']).decode('utf-8'))
 END
     )
 
-    wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p "$src_contenid" > /dev/null 2>&1
+    wget $WGET_OPTS --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -p "$src_contenid" > /dev/null 2>&1
     index=$(find mediafire.com -type f -name "index.html")
     src_contenido=$(grep -oP '(?<=href=")[^"]*' "$index" | grep 'https://download')
   else
@@ -834,7 +839,7 @@ while true; do
 
     rm -f resultados.txt
 
-    curl -s -m 25 -A "$JK_UA" \
+    curl $CURL_OPTS -A "$JK_UA" \
         "https://jkanime.net/idioma/$IDIOMA_BROWSE?p=$pag" \
         -o pagina_idioma.html 2>/dev/null
 

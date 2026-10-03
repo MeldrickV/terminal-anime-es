@@ -35,10 +35,9 @@ CLI tool powered by **mpv + fzf**
 * 🔍 Búsqueda de animes desde la terminal
 * 📺 Reproducción directa con **mpv**
 * ⏭️ Navegación entre episodios (siguiente / anterior)
-* 💾 Guarda automáticamente el último episodio visto
-* 🔄 Auto-actualización del script
+* 💾 Guarda automáticamente el último episodio visto y el progreso
+* 🗣️ Detección de idioma por anime (doblaje latino / subtitulado)
 * ⚡ Interfaz interactiva con **fzf**
-* 🧠 Fallback automático para episodios en emisión
 * 📦 Compatible con múltiples distribuciones Linux
 
 ---
@@ -118,6 +117,23 @@ O directamente:
 ani-es naruto
 ```
 
+### Opciones
+
+```bash
+ani-es -h, --help       # Mostrar ayuda
+ani-es -v, --version    # Mostrar versión
+ani-es -c, --continue  # Continuar el último anime en donde lo dejaste
+ani-es -i IDIOMA       # Explorar el catálogo de un idioma:
+                       #   espanol-latino | japones
+```
+
+Ejemplos:
+
+```bash
+ani-es -c naruto            # retoma naruto donde lo dejaste
+ani-es -i espanol-latino    # lista animes con doblaje latino
+```
+
 ---
 
 ## 📦 Compatibilidad
@@ -156,12 +172,21 @@ El instalador se encarga de todo automáticamente.
 
 ## 💾 Historial
 
-El script guarda automáticamente:
+El script guarda automáticamente en `~/ani-es/history.json`:
 
 * Último anime visto
-* Último episodio
+* Último episodio (`last_cap`)
+* Progreso de reproducción (`progress`, formato `HH:MM:SS`)
+* Fuente (`source`: `jkanime`)
 
-Para que puedas continuar fácilmente después.
+Ejemplo:
+
+```json
+{"Naruto": {"last_cap": 5, "progress": "00:12:30", "source": "jkanime"}}
+```
+
+Antes de cada escritura se crea `history.json.bak` (1 generación).
+Si el archivo se corrompe (vacío o JSON inválido), se regenera solo al arrancar.
 
 ---
 

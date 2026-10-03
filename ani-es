@@ -199,6 +199,8 @@ save_history() {
             source: $source
         }' \
         "$HISTORY_FILE" > "$tmp" 2>/dev/null; then
+        # backup rotativo (1 generacion) antes de reemplazar
+        cp -f "$HISTORY_FILE" "$HISTORY_FILE.bak" 2>/dev/null
         mv "$tmp" "$HISTORY_FILE"
     else
         rm -f "$tmp"
@@ -893,6 +895,15 @@ done
 
 
 # ==================== ENTRADA ====================
+
+# limpieza de temporales del CWD al salir (normal, error o Ctrl+C).
+# el guard BASHPID evita que se dispare en cada subshell $(...)
+limpiar_temporales() {
+    [ "$BASHPID" = "$$" ] || return 0
+    rm -f cookies.txt resultados.txt pagina_idioma.html index 2>/dev/null
+    rm -f "$page_anime" 2>/dev/null
+}
+trap limpiar_temporales EXIT INT TERM
 
 main() {
 

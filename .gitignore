@@ -1,0 +1,13 @@
+# Datos personales del usuario: nunca subir al repo
+history.json
+history.json.bak
+history.db
+
+# Temporales del scraper en el CWD
+cookies.txt
+resultados.txt
+pagina_idioma.html
+index
+jkanime.net/
+mediafire.com/
+ani-es-page-*.html

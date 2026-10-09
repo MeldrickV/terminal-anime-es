@@ -19,10 +19,19 @@ jobs:
         run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
           mkdir -p /tmp/snap
-          curl -sS --max-time 25 --retry 2 --fail -A "$UA" \
-            -o /tmp/snap/busqueda.html "https://jkanime.net/buscar/pokemon/"
-          curl -sS --max-time 25 --retry 2 --fail -A "$UA" -c /tmp/snap/cookies.txt \
-            -o /tmp/snap/detalle.html "https://jkanime.net/pokemon/"
+          # Cabeceras de navegador: sin Accept/Accept-Language algunos
+          # WAF (Cloudflare) responden 403 a los runners de Actions.
+          HDRS=(-A "$UA"
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            -H "Accept-Language: es-ES,es;q=0.9,en;q=0.8"
+            -H "Referer: https://jkanime.net/"
+            --compressed)
+          curl -sS --max-time 25 --retry 2 --fail "${HDRS[@]}" \
+            -o /tmp/snap/busqueda.html "https://jkanime.net/buscar/pokemon/" \
+            || { echo "::error::Descarga bloqueada (ver codigo curl arriba). Si es HTTP 403, el sitio esta vivo pero bloquea la IP del runner: re-ejecutar manual y comparar con la terminal real."; exit 1; }
+          curl -sS --max-time 25 --retry 2 --fail "${HDRS[@]}" -c /tmp/snap/cookies.txt \
+            -o /tmp/snap/detalle.html "https://jkanime.net/pokemon/" \
+            || { echo "::error::Descarga de detalle bloqueada (ver codigo curl arriba)."; exit 1; }
           TOKEN=$(grep -oP 'meta name="csrf-token" content="\K[^"]+' /tmp/snap/detalle.html | head -n1)
           API=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" /tmp/snap/detalle.html | head -n1)
           echo "TOKEN_LEN=${#TOKEN}" >> "$GITHUB_ENV"

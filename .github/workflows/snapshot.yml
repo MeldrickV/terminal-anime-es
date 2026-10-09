@@ -71,8 +71,12 @@ jobs:
               --max-time 25 --retry 2 "${HDRS[@]}" \
               "$AF/ver/naruto-1")
             echo "HTTP af_capitulo=$code_af_c"
-            [ "$code_af_c" = "403" ] && echo "AF_BLOQUEADO=1" >> "$GITHUB_ENV"
-            [ "$code_af_c" != "200" ] && [ "$code_af_c" != "403" ] && { echo "::error::Descarga capitulo AF fallo (HTTP $code_af_c)."; exit 1; }
+            if [ "$code_af_c" = "403" ]; then
+              echo "AF_BLOQUEADO=1" >> "$GITHUB_ENV"
+            elif [ "$code_af_c" != "200" ]; then
+              echo "::error::Descarga capitulo AF fallo (HTTP $code_af_c)."
+              exit 1
+            fi
           fi
 
       - name: Verificar marcadores

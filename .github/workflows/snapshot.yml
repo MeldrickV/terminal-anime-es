@@ -19,24 +19,34 @@ jobs:
         run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
           mkdir -p /tmp/snap
-          # Cabeceras de navegador: sin Accept/Accept-Language algunos
-          # WAF (Cloudflare) responden 403 a los runners de Actions.
           HDRS=(-A "$UA"
             -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
             -H "Accept-Language: es-ES,es;q=0.9,en;q=0.8"
             -H "Referer: https://jkanime.net/"
             --compressed)
-          curl -sS --max-time 25 --retry 2 --fail "${HDRS[@]}" \
-            -o /tmp/snap/busqueda.html "https://jkanime.net/buscar/pokemon/" \
-            || { echo "::error::Descarga bloqueada (ver codigo curl arriba). Si es HTTP 403, el sitio esta vivo pero bloquea la IP del runner: re-ejecutar manual y comparar con la terminal real."; exit 1; }
-          curl -sS --max-time 25 --retry 2 --fail "${HDRS[@]}" -c /tmp/snap/cookies.txt \
-            -o /tmp/snap/detalle.html "https://jkanime.net/pokemon/" \
-            || { echo "::error::Descarga de detalle bloqueada (ver codigo curl arriba)."; exit 1; }
+          code_busq=$(curl -s -o /tmp/snap/busqueda.html -w "%{http_code}" \
+            --max-time 25 --retry 2 "${HDRS[@]}" \
+            "https://jkanime.net/buscar/pokemon/")
+          code_det=$(curl -s -c /tmp/snap/cookies.txt -o /tmp/snap/detalle.html -w "%{http_code}" \
+            --max-time 25 --retry 2 "${HDRS[@]}" \
+            "https://jkanime.net/pokemon/")
+          echo "HTTP busqueda=$code_busq detalle=$code_det"
+          # 403 = el WAF bloquea la IP del runner (el sitio sigue vivo para
+          # usuarios reales): no es fallo de marcadores, se delega a QA manual.
+          if [ "$code_busq" = "403" ] || [ "$code_det" = "403" ]; then
+            echo "::warning::jkanime bloquea la IP del runner (HTTP 403). Verificacion manual requerida en terminal real."
+            echo "BLOQUEADO=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$code_busq" != "200" ] || [ "$code_det" != "200" ]; then
+            echo "::error::Descarga fallo (HTTP $code_busq/$code_det). Sitio posiblemente caido."
+            exit 1
+          fi
           TOKEN=$(grep -oP 'meta name="csrf-token" content="\K[^"]+' /tmp/snap/detalle.html | head -n1)
           API=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" /tmp/snap/detalle.html | head -n1)
           echo "TOKEN_LEN=${#TOKEN}" >> "$GITHUB_ENV"
           if [ -n "$TOKEN" ] && [ -n "$API" ]; then
-            curl -sS --max-time 25 --retry 2 --fail -X POST "$API" -b /tmp/snap/cookies.txt \
+            curl -s --max-time 25 --retry 2 -X POST "$API" -b /tmp/snap/cookies.txt \
               -H "X-Requested-With: XMLHttpRequest" \
               -H "X-CSRF-TOKEN: $TOKEN" \
               --data-urlencode "_token=$TOKEN" \
@@ -44,6 +54,7 @@ jobs:
           fi
 
       - name: Verificar marcadores
+        if: env.BLOQUEADO != '1'
         run: |
           fallo=0
           check() {

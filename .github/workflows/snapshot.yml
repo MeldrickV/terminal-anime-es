@@ -36,21 +36,20 @@ jobs:
           if [ "$code_busq" = "403" ] || [ "$code_det" = "403" ]; then
             echo "::warning::jkanime bloquea la IP del runner (HTTP 403). Verificacion manual requerida en terminal real."
             echo "BLOQUEADO=1" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          if [ "$code_busq" != "200" ] || [ "$code_det" != "200" ]; then
+          elif [ "$code_busq" != "200" ] || [ "$code_det" != "200" ]; then
             echo "::error::Descarga fallo (HTTP $code_busq/$code_det). Sitio posiblemente caido."
             exit 1
-          fi
-          TOKEN=$(grep -oP 'meta name="csrf-token" content="\K[^"]+' /tmp/snap/detalle.html | head -n1)
-          API=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" /tmp/snap/detalle.html | head -n1)
-          echo "TOKEN_LEN=${#TOKEN}" >> "$GITHUB_ENV"
-          if [ -n "$TOKEN" ] && [ -n "$API" ]; then
-            curl -s --max-time 25 --retry 2 -X POST "$API" -b /tmp/snap/cookies.txt \
-              -H "X-Requested-With: XMLHttpRequest" \
-              -H "X-CSRF-TOKEN: $TOKEN" \
-              --data-urlencode "_token=$TOKEN" \
-              -o /tmp/snap/episodios.json
+          else
+            TOKEN=$(grep -oP 'meta name="csrf-token" content="\K[^"]+' /tmp/snap/detalle.html | head -n1)
+            API=$(grep -oP "url:\s*'\Khttps://jkanime\.net/ajax/episodes/\d+/?" /tmp/snap/detalle.html | head -n1)
+            echo "TOKEN_LEN=${#TOKEN}" >> "$GITHUB_ENV"
+            if [ -n "$TOKEN" ] && [ -n "$API" ]; then
+              curl -s --max-time 25 --retry 2 -X POST "$API" -b /tmp/snap/cookies.txt \
+                -H "X-Requested-With: XMLHttpRequest" \
+                -H "X-CSRF-TOKEN: $TOKEN" \
+                --data-urlencode "_token=$TOKEN" \
+                -o /tmp/snap/episodios.json
+            fi
           fi
           # ---- animeflv ----
           AF="https://vww.animeflv.one"

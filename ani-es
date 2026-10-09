@@ -37,6 +37,11 @@ JK_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 CURL_OPTS="--max-time 25 --retry 2 --fail -s"
 WGET_OPTS="--timeout=25 --tries=2"
 
+# segunda fuente: AnimeFLV (espejo configurable en una sola variable)
+AF_BASE="https://vww.animeflv.one"
+# fuente elegida: jkanime | animeflv (vacio = preguntar con fzf)
+FUENTE=""
+
 # estado interno del flujo
 SRC_REFERER=""
 CMD_UA="$JK_UA"
@@ -133,29 +138,6 @@ EOF
         fi
     fi
 
-    # La fuente AnimeFLV fue retirada; sus registros pasan a jkanime
-    # para que "-c" siga funcionando sin tocar el pipeline eliminado.
-    python3 <<EOF
-import json
-
-path = "$HISTORY_FILE"
-
-try:
-    with open(path, "r", encoding="utf-8") as f:
-        history = json.load(f)
-except Exception:
-    history = {}
-
-changed = False
-for anime, data in list(history.items()):
-    if isinstance(data, dict) and data.get("source") == "animeflv":
-        data["source"] = "jkanime"
-        changed = True
-
-if changed:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=4, ensure_ascii=False)
-EOF
 }
 
 init_history
@@ -216,7 +198,8 @@ show_help() {
     echo "      -h, --help       Mostrar ayuda"
     echo "      -v, --version    Mostrar versión"
     echo "      -c, --continue   Continua el anime en donde ultimo lo dejaste"
-    echo "      -i, --idioma ID  Lista los animes de un idioma (espanol-latino | japones)"
+    echo "      -i, --idioma ID  Lista los animes de un idioma (espanol-latino | japones)
+      -s, --source SRC  Fuente (jkanime | animeflv)"
     echo ""
 }
 
@@ -241,6 +224,18 @@ while [[ $# -gt 0 ]]; do
         -i|--idioma)
             if [[ -n "$2" ]]; then
                 IDIOMA_BROWSE="$2"
+                shift
+            fi
+            ;;
+        -s|--source)
+            if [[ -n "$2" ]]; then
+                case "$2" in
+                    jkanime|animeflv) FUENTE="$2" ;;
+                    *)
+                        echo "Fuente no válida: $2 (usa jkanime | animeflv)"
+                        exit 1
+                        ;;
+                esac
                 shift
             fi
             ;;
@@ -293,19 +288,21 @@ detect_env() {
 
 reproducir() {
     local src_contenido="$1"
-    local hdrs=""
+    local hdrs=()
 
     ENV=$(detect_env)
     pos=0
 
+    # Referer solo cuando el flujo lo fija (AnimeFLV lo necesita; jkanime no).
+    # Array citado: evita las comillas literales rotas del string anterior.
     if [ -n "$SRC_REFERER" ]; then
-        hdrs="--user-agent=$CMD_UA --http-header-fields=\"Referer: $SRC_REFERER\""
+        hdrs=(--http-header-fields="Referer: $SRC_REFERER")
     fi
 
     case "$ENV" in
         wsl)
             if command -v mpv.exe >/dev/null 2>&1; then
-                pos=$(mpv.exe --start=$progress $hdrs --msg-level=ffmpeg=no --force-media-title="$titulo_elegido-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
+                pos=$(mpv.exe --start=$progress "${hdrs[@]}" --msg-level=ffmpeg=no --force-media-title="$titulo_elegido-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
             else
                 echo "mpv.exe no encontrado en Windows PATH"
             fi
@@ -321,7 +318,7 @@ reproducir() {
             ;;
         linux)
             if command -v mpv >/dev/null 2>&1; then
-                pos=$(mpv --start=$progress $hdrs -v --msg-level=ffmpeg=no --force-media-title="$titulo_elegido-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
+                pos=$(mpv --start=$progress "${hdrs[@]}" -v --msg-level=ffmpeg=no --force-media-title="$titulo_elegido-$capi" "$src_contenido" | grep -oE 'AV: [0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -n 1  | sed 's/AV: //g' 2>&1)
             fi
             ;;
     esac
@@ -601,7 +598,7 @@ else
   echo -e "Pagina: 1 ${NC}"
 
   echo -e "Resultados para: $query"
-  opcion=$( (cat "resultados.txt"; echo "Salir"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=20 --border --info=inline --margin=1,1,0,0)
+  opcion=$( (cat "resultados.txt"; echo "Cambiar fuente"; echo "Salir"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=20 --border --info=inline --margin=1,1,0,0)
   clear
 fi
 
@@ -609,6 +606,9 @@ if [[ "$opcion" == "Siguiente" ]]; then
   pagina_siguiente "https://jkanime.net/buscar/$query/"
 elif [[ "$opcion" == "Anterior" ]]; then
   pagina_anterior "https://jkanime.net/buscar/$query/"
+elif [[ "$opcion" == "Cambiar fuente" ]]; then
+  FUENTE=""
+  ABORT=1
 elif [[ "$opcion" == "Salir" ]]; then
   ABORT=1
 elif [[ "$opcion" == "Salir del programa" ]]; then
@@ -827,6 +827,267 @@ videocap $capurl
 }
 
 
+# ==================== PIPELINE ANIMEFLV (segunda fuente) ====================
+# busqueda /anime/<slug>, episodios via `var eps`, video via POST /flv.
+# solo reproduce servidores que den URL directa (.mp4/.m3u8/.webm en el HTML
+# del embed); los que exigen JS se saltan avisando (sin WebView en bash).
+
+es_playable_af() {
+    local url="$1" ref="$2"
+    local code
+    code=$(curl $CURL_OPTS -o /dev/null -w "%{http_code}" -A "$JK_UA" \
+        -H "Referer: $ref" -H "Range: bytes=0-0" "$url" 2>/dev/null)
+    [[ "$code" == "200" || "$code" == "206" ]]
+}
+
+ir_a_capitulo_af() {
+    videocap_af "$AF_BASE/ver/$af_slug-$1" "$af_slug" "$1"
+}
+
+videocap_af() {
+    local capurl="$1" slug="$2" cap="$3"
+    local page_cap="${TMPDIR:-/tmp}/ani-es-af-cap-$$.html"
+    local flv_json="${TMPDIR:-/tmp}/ani-es-af-flv-$$.html"
+    local page_emb="${TMPDIR:-/tmp}/ani-es-af-emb-$$.html"
+
+    curl $CURL_OPTS -c af_cookies.txt -A "$JK_UA" -o "$page_cap" "$capurl"
+
+    local enc
+    enc=$(grep -oP '<ul class="opt" data-encrypt="\K[^"]+' "$page_cap" | head -n1)
+    if [ -z "$enc" ]; then
+        # fallback: data-id de la pagina del anime -> hex("<id>-<cap>")
+        local aid
+        aid=$(curl $CURL_OPTS -A "$JK_UA" "$AF_BASE/anime/$slug" | grep -oP 'data-id="\K[0-9]+' | head -n1)
+        if [ -n "$aid" ]; then
+            enc=$(python3 -c "print(('$aid-$cap').encode().hex())")
+        fi
+    fi
+    if [ -z "$enc" ]; then
+        echo -e "${RED}No se pudo obtener la lista de servidores.${NC}"
+        rm -f "$page_cap" af_cookies.txt
+        return 1
+    fi
+
+    curl $CURL_OPTS -A "$JK_UA" -b af_cookies.txt -X POST "$AF_BASE/flv" \
+        -H "X-Requested-With: XMLHttpRequest" -H "Referer: $capurl" \
+        --data-urlencode "acc=opt" --data-urlencode "i=$enc" -o "$flv_json"
+
+    # pares "servidor<TAB>url" con hex decodificado, mp4upload primero
+    local lista
+    lista=$(python3 - "$flv_json" <<'PYEOF'
+import re, sys
+html = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+pares = []
+for enc, title in re.findall(r'encrypt="([^"]+)" title="([^"]+)"', html):
+    try:
+        url = bytes.fromhex(enc).decode("utf-8", errors="replace")
+    except Exception:
+        continue
+    if url.startswith("http"):
+        pares.append((title, url))
+pares.sort(key=lambda p: 0 if "mp4upload" in p[0].lower() else 1)
+for t, u in pares:
+    print(f"{t}\t{u}")
+PYEOF
+)
+    if [ -z "$lista" ]; then
+        echo -e "${RED}Sin servidores para este capitulo.${NC}"
+        rm -f "$page_cap" "$flv_json" af_cookies.txt
+        return 1
+    fi
+
+    src_contenido=""
+    SRC_REFERER=""
+    local saltados=""
+    while IFS=$'\t' read -r srv url; do
+        [ -z "$url" ] && continue
+        local candidato="" ref="$url"
+        case "$url" in
+            *.mp4*|*.m3u8*|*.webm*)
+                candidato="$url"
+                ;;
+            *)
+                curl $CURL_OPTS -A "$JK_UA" -H "Referer: $capurl" -o "$page_emb" "$url" 2>/dev/null
+                candidato=$(grep -oP 'https?://[^"'\''\s<>]+\.(mp4|m3u8|webm)[^"'\''\s<>]*' "$page_emb" 2>/dev/null | head -n1)
+                # mp4upload esconde el mp4 en `src: "..."` del JS
+                if [ -z "$candidato" ]; then
+                    candidato=$(grep -oP 'src:\s*"\Khttps?://[^"]+' "$page_emb" 2>/dev/null | head -n1)
+                fi
+                ;;
+        esac
+        if [ -z "$candidato" ]; then
+            saltados="$saltados $srv(requiere-JS)"
+            continue
+        fi
+        if es_playable_af "$candidato" "$ref"; then
+            src_contenido="$candidato"
+            SRC_REFERER="$ref"
+            break
+        else
+            saltados="$saltados $srv(caido)"
+        fi
+    done <<< "$lista"
+
+    rm -f "$page_cap" "$flv_json" "$page_emb" af_cookies.txt
+
+    if [ -z "$src_contenido" ]; then
+        echo -e "${RED}Ningún servidor dio video directo.${NC}"
+        [ -n "$saltados" ] && echo -e "Servidores:${CYAN}$saltados${NC}"
+        return 1
+    fi
+
+    echo "Capitulo: $cap"
+
+    reproducir "$src_contenido"
+
+    save_history "$titulo_elegido" "$cap" "$pos" "animeflv"
+
+    menu_post_reproduccion
+}
+
+pipeline_animeflv() {
+
+clear
+
+if [[ -n "$oracion" ]]; then
+    :
+elif [[ -z "$arg1" ]]; then
+    read -p "Buscar Anime: " oracion
+    clear
+    if [[ -z "$oracion" ]]; then
+        SALIR=1
+        ABORT=1
+        return
+    fi
+else
+    oracion="$arg1"
+fi
+
+echo Cargando...
+
+local q_af
+q_af=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$oracion")
+local page_busq="${TMPDIR:-/tmp}/ani-es-af-busq-$$.html"
+curl $CURL_OPTS -A "$JK_UA" -o "$page_busq" "$AF_BASE/animes?buscar=$q_af&pag=1"
+
+# lineas "slug<TAB>titulo"
+grep -oP '<h3 class="h"><a href="\./anime/\K[^"]+">[^<]+(?=</a>)' "$page_busq" \
+    | sed 's/">/\t/; s/&quot;//g; s/&#039;/'"'"'/g; s/&amp;/\&/g' > resultados.txt
+rm -f "$page_busq"
+
+if [ ! -s resultados.txt ]; then
+    echo -e "${RED}Sin resultados para: $oracion${NC}"
+    return
+fi
+
+# el menu trabaja con titulos; el slug se recupera despues
+cut -f2 resultados.txt > /tmp/ani-es-af-tit-$$.txt
+if [[ "$(wc -l < resultados.txt)" == "1" ]]; then
+    opcion=$(cat /tmp/ani-es-af-tit-$$.txt)
+    echo Cargando...
+else
+    echo -e "Resultados para ($CYAN AnimeFLV $NC): $oracion"
+    opcion=$( (cat /tmp/ani-es-af-tit-$$.txt; echo "Cambiar fuente"; echo "Salir"; echo "Salir del programa") | tac | fzf --prompt="Selecciona una opción: " --height=20 --border --info=inline --margin=1,1,0,0)
+    clear
+fi
+rm -f /tmp/ani-es-af-tit-$$.txt
+
+if [[ "$opcion" == "Cambiar fuente" ]]; then
+    FUENTE=""
+    ABORT=1
+    return
+elif [[ "$opcion" == "Salir" ]]; then
+    ABORT=1
+    return
+elif [[ "$opcion" == "Salir del programa" ]]; then
+    SALIR=1
+    ABORT=1
+    return
+fi
+if [ -z "$opcion" ]; then
+    return
+fi
+
+titulo_elegido="$opcion"
+af_slug=$(grep -P "\t$(printf '%s' "$opcion" | sed 's/[][\.*^$/]/\\&/g')\$" resultados.txt | cut -f1 | head -n1)
+
+if [ -z "$af_slug" ]; then
+    echo -e "${RED}No se pudo resolver el slug.${NC}"
+    return
+fi
+
+nuevaurl="$AF_BASE/anime/$af_slug"
+echo Cargando...
+
+local page_anime_af="${TMPDIR:-/tmp}/ani-es-af-det-$$.html"
+curl $CURL_OPTS -A "$JK_UA" -o "$page_anime_af" "$nuevaurl"
+
+titulo_elegido="$opcion"
+
+echo -e "Anime ($CYAN AnimeFLV $NC): $GREEN $titulo_elegido $WHITE"
+echo -e "Idioma: $CYAN Subtitulado $WHITE"
+
+last_cap=$(get_last_cap "$titulo_elegido")
+echo -e "Ultimo episodio visto: $last_cap"
+
+# episodios: var eps = [["220","1",""],...] -> numeros distintos ordenados
+local eps_txt
+eps_txt=$(python3 - "$page_anime_af" <<'PYEOF'
+import re, json, sys
+html = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+m = re.search(r"var eps\s*=\s*(\[.*?\]);", html, re.S)
+nums = []
+if m:
+    try:
+        for e in json.loads(m.group(1)):
+            if e and str(e[0]).isdigit() and str(e[0]) != "0":
+                nums.append(int(e[0]))
+    except Exception:
+        pass
+print(" ".join(map(str, sorted(set(nums)))))
+PYEOF
+)
+local total_af
+total_af=$(grep -oP 'data-ep="\K[0-9]+' "$page_anime_af" | head -n1)
+rm -f "$page_anime_af"
+
+if [ -z "$eps_txt" ] && [ -n "$total_af" ] && [ "$total_af" -gt 0 ] 2>/dev/null; then
+    eps_txt=$(seq 1 "$total_af" | tr '\n' ' ')
+fi
+if [ -z "$eps_txt" ]; then
+    echo -e "${RED}No se pudieron obtener los episodios.${NC}"
+    return
+fi
+num_episodios=$(wc -w <<< "$eps_txt")
+
+if [ "$CONTINUE" == 1 ]; then
+    capi=$last_cap
+    progress=$(get_progress "$titulo_elegido")
+else
+    capi=$(tr ' ' '\n' <<< "$eps_txt" | fzf \
+        --prompt="Episodio: " \
+        --height=30 \
+        --border \
+        --reverse)
+fi
+
+if [ -z "$capi" ]; then
+    echo -e "${RED}No se seleccionó ningún episodio.${NC}"
+    clear
+    return
+fi
+
+clear
+
+# menu_post_reproduccion llama a ir_a_capitulo; aqui apunta al flujo AF
+ir_a_capitulo() {
+    ir_a_capitulo_af "$@"
+}
+
+videocap_af "$AF_BASE/ver/$af_slug-$capi" "$af_slug" "$capi"
+}
+
+
 # ==================== PIPELINE IDIOMA (indice por idioma) ====================
 # navega el catalogo paginado /idioma/<slug> (espanol-latino | japones)
 # y, al elegir un anime, continua dentro del pipeline jkanime (reentrada)
@@ -900,8 +1161,9 @@ done
 # el guard BASHPID evita que se dispare en cada subshell $(...)
 limpiar_temporales() {
     [ "$BASHPID" = "$$" ] || return 0
-    rm -f cookies.txt resultados.txt pagina_idioma.html index 2>/dev/null
+    rm -f cookies.txt af_cookies.txt resultados.txt pagina_idioma.html index 2>/dev/null
     rm -f "$page_anime" 2>/dev/null
+    rm -f ${TMPDIR:-/tmp}/ani-es-af-*.html /tmp/ani-es-af-tit-*.txt 2>/dev/null
 }
 trap limpiar_temporales EXIT INT TERM
 
@@ -923,16 +1185,34 @@ while true; do
         REENTRY="jkanime|$arg1"
     fi
 
+    # selector de fuente (solo si no viene por -s/-c/-i)
+    if [ -z "$FUENTE" ] && [ -z "$IDIOMA_BROWSE" ]; then
+        sel=$(printf 'J-Kanime\nAnimeFLV\nSalir del programa' | fzf --prompt="Fuente: " --height=10 --border --reverse)
+        case "$sel" in
+            "J-Kanime") FUENTE="jkanime" ;;
+            "AnimeFLV") FUENTE="animeflv" ;;
+            *) SALIR=1 ;;
+        esac
+        clear
+        if [ "$SALIR" == "1" ]; then
+            break
+        fi
+    fi
+
     limpiar_estado
 
     if [ -n "$REENTRY" ]; then
         _re="$REENTRY"
         REENTRY=""
+        [[ "$_re" == *"|"* ]] || _re="jkanime|$_re"
+        FUENTE="${_re%%|*}"
         oracion="${_re#*|}"
     fi
 
     if [ -n "$IDIOMA_BROWSE" ]; then
         pipeline_idioma
+    elif [ "$FUENTE" == "animeflv" ]; then
+        pipeline_animeflv
     else
         pipeline_jkanime
     fi

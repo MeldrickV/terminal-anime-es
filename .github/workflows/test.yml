@@ -1,0 +1,71 @@
+# Validacion del proyecto terminal (solo CI, nunca en local).
+#
+# - Sintaxis bash de todos los scripts.
+# - shellcheck (errores y avisos de robustez).
+# - Smoke no interactivo: --help y --version deben salir con codigo 0
+#   (son las unicas rutas que no entran al bucle fzf/mpv).
+# La interactividad (fzf/mpv) se valida con QA manual en la terminal real.
+name: Test terminal
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ani-es"
+      - "install.sh"
+      - "uninstall.sh"
+      - ".github/workflows/test.yml"
+  pull_request:
+    paths:
+      - "ani-es"
+      - "install.sh"
+      - "uninstall.sh"
+  workflow_dispatch:
+
+jobs:
+  sintaxis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n en todos los scripts
+        run: |
+          bash -n ani-es && echo "ani-es OK"
+          bash -n install.sh && echo "install.sh OK"
+          bash -n uninstall.sh && echo "uninstall.sh OK"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          shellcheck -S error -e SC2086 ani-es install.sh uninstall.sh
+          echo "shellcheck OK (sin errores)"
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: --help sale con codigo 0 y muestra uso
+        run: |
+          ./ani-es --help > /tmp/help.txt
+          grep -q "Uso: ani-es" /tmp/help.txt
+          grep -q "\-\-continue" /tmp/help.txt
+          grep -q "\-\-idioma" /tmp/help.txt
+          echo "help OK"
+      - name: --version sale con codigo 0 y formato vX.Y.Z
+        run: |
+          ./ani-es --version > /tmp/version.txt
+          grep -qaP "v\d+\.\d+\.\d+" /tmp/version.txt
+          echo "version OK: $(tr -d '\000-\010\013\014\016-\037' < /tmp/version.txt)"
+      - name: Sin dependencias aborta limpio listando lo que falta
+        run: |
+          # Sin fzf/mpv/wget en el runner: debe salir codigo 1 con mensaje,
+          # sin colgarse y sin entrar al bucle interactivo.
+          set +e
+          ./ani-es < /dev/null > /tmp/nodeps.txt 2>&1
+          codigo=$?
+          set -e
+          [ "$codigo" -eq 1 ]
+          grep -q "Dependencias faltantes" /tmp/nodeps.txt
+          echo "abort-limpio OK (exit 1 con mensaje)"

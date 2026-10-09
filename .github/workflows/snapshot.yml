@@ -1,9 +1,9 @@
-# Vigia de cambios en el HTML de jkanime (D1).
+# Vigia de cambios en el HTML de jkanime y animeflv (D1+E4).
 #
 # Descarga paginas testigo y verifica que los marcadores que usa el script
 # sigan existiendo. Si alguno falta, el job falla y avisa ANTES de que los
 # usuarios lo sufran. No toca la red fuera de este workflow (schedule/manual).
-name: Snapshot jkanime
+name: Snapshot fuentes
 
 on:
   schedule:
@@ -52,6 +52,29 @@ jobs:
               --data-urlencode "_token=$TOKEN" \
               -o /tmp/snap/episodios.json
           fi
+          # ---- animeflv ----
+          AF="https://vww.animeflv.one"
+          code_af_b=$(curl -s -o /tmp/snap/af_busq.html -w "%{http_code}" \
+            --max-time 25 --retry 2 "${HDRS[@]}" \
+            "$AF/animes?buscar=naruto&pag=1")
+          code_af_d=$(curl -s -c /tmp/snap/af_cookies.txt -o /tmp/snap/af_det.html -w "%{http_code}" \
+            --max-time 25 --retry 2 "${HDRS[@]}" \
+            "$AF/anime/naruto")
+          echo "HTTP af_busqueda=$code_af_b af_detalle=$code_af_d"
+          if [ "$code_af_b" = "403" ] || [ "$code_af_d" = "403" ]; then
+            echo "::warning::animeflv bloquea la IP del runner (HTTP 403). Verificacion manual requerida."
+            echo "AF_BLOQUEADO=1" >> "$GITHUB_ENV"
+          elif [ "$code_af_b" != "200" ] || [ "$code_af_d" != "200" ]; then
+            echo "::error::Descarga animeflv fallo (HTTP $code_af_b/$code_af_d)."
+            exit 1
+          else
+            code_af_c=$(curl -s -c /tmp/snap/af_cookies.txt -o /tmp/snap/af_cap.html -w "%{http_code}" \
+              --max-time 25 --retry 2 "${HDRS[@]}" \
+              "$AF/ver/naruto-1")
+            echo "HTTP af_capitulo=$code_af_c"
+            [ "$code_af_c" = "403" ] && echo "AF_BLOQUEADO=1" >> "$GITHUB_ENV"
+            [ "$code_af_c" != "200" ] && [ "$code_af_c" != "403" ] && { echo "::error::Descarga capitulo AF fallo (HTTP $code_af_c)."; exit 1; }
+          fi
 
       - name: Verificar marcadores
         if: env.BLOQUEADO != '1'
@@ -75,5 +98,25 @@ jobs:
           else
             echo "::error::Marcador perdido: ajax episodios.json (POST fallo)"
             fallo=1
+          fi
+          exit $fallo
+
+      - name: Verificar marcadores animeflv
+        if: env.AF_BLOQUEADO != '1'
+        run: |
+          fallo=0
+          check() {
+            if ! grep -qaP "$2" "$1"; then
+              echo "::error::Marcador AF perdido: $3 (archivo $1)"
+              fallo=1
+            else
+              echo "OK AF: $3"
+            fi
+          }
+          check /tmp/snap/af_busq.html '<h3 class="h"><a href="\./anime/' "busqueda anime/<slug>"
+          check /tmp/snap/af_det.html 'data-ep="[0-9]+' "detalle data-ep"
+          check /tmp/snap/af_det.html 'var eps\s*=' "detalle var eps"
+          if [ -f /tmp/snap/af_cap.html ]; then
+            check /tmp/snap/af_cap.html 'data-encrypt' "capitulo data-encrypt"
           fi
           exit $fallo

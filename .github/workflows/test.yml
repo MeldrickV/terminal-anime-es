@@ -52,6 +52,7 @@ jobs:
           grep -q "Uso: ani-es" /tmp/help.txt
           grep -q "\-\-continue" /tmp/help.txt
           grep -q "\-\-idioma" /tmp/help.txt
+          grep -q "\-\-source" /tmp/help.txt
           echo "help OK"
       - name: --version sale con codigo 0 y formato vX.Y.Z
         run: |

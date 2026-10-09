@@ -1,12 +1,14 @@
 # ani-es — Ver anime en español desde la terminal
 
 CLI en Bash para **buscar, ver y continuar anime en español** (doblaje latino
-o subtitulado) sin salir de la terminal. Fuente actual: **J-Kanime**.
+o subtitulado) sin salir de la terminal. Fuentes: **J-Kanime** y **AnimeFLV**
+(selección al arrancar o con `-s`).
 
 ```bash
-ani-es naruto          # buscar y ver
-ani-es -c naruto       # continuar donde lo dejaste
-ani-es -i espanol-latino   # explorar catálogo con doblaje latino
+ani-es naruto               # eliges fuente, luego buscas y ves
+ani-es -s animeflv naruto   # directo a AnimeFLV
+ani-es -c naruto            # continuar donde lo dejaste
+ani-es -i espanol-latino    # explorar catálogo con doblaje latino (J-Kanime)
 ```
 
 ---
@@ -85,7 +87,8 @@ ani-es [opciones] [búsqueda]
 | `-h, --help` | Mostrar ayuda |
 | `-v, --version` | Mostrar versión |
 | `-c, --continue` | Continuar el último anime donde lo dejaste (combina con búsqueda: `ani-es -c naruto`) |
-| `-i, --idioma ID` | Explorar el catálogo de un idioma: `espanol-latino` \| `japones` |
+| `-s, --source SRC` | Fuente directa sin preguntar: `jkanime` \| `animeflv` |
+| `-i, --idioma ID` | Explorar el catálogo de un idioma: `espanol-latino` \| `japones` (J-Kanime) |
 
 ### Flujo típico
 
@@ -99,7 +102,25 @@ ani-es [opciones] [búsqueda]
 
 Cada ficha muestra el idioma detectado en la página del anime
 (`Doblaje latino`, `Subtitulado`, `Castellano` o combinaciones). Con `-i`
-navegas el catálogo completo de un idioma, paginado.
+navegas el catálogo completo de un idioma, paginado (J-Kanime).
+
+### Fuentes: J-Kanime vs AnimeFLV
+
+| | J-Kanime | AnimeFLV |
+|---|---|---|
+| Búsqueda / ficha / episodios | ✅ | ✅ |
+| Idiomas | latino + subtitulado + castellano | solo subtitulado |
+| Catálogo `-i` | ✅ | ❌ |
+| Video | jkplayer / jk.php / Mediafire | mp4upload y directos `.mp4/.m3u8` |
+
+**Límite conocido (AnimeFLV):** solo se reproducen servidores que entregan
+URL directa sin JavaScript. Los embeds que exigen JS (ok.ru, MEGA, filemoon…)
+se listan como `requiere-JS` y se saltan: en bash no hay WebView. Si ningún
+servidor da video directo, el script lo dice y vuelve al menú.
+
+El espejo de AnimeFLV cambia de dominio cada cierto tiempo; vive en una sola
+variable arriba del script: `AF_BASE="https://vww.animeflv.one"`. El workflow
+`snapshot.yml` vigila sus marcadores igual que los de J-Kanime.
 
 ## 6. Arquitectura y flujo de datos
 
